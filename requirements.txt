@@ -1,0 +1,6 @@
+pytelegrambotapi>=4.12.7
+Flask==3.0.2
+pymongo==4.6.1
+requests
+Pillow>=9.0.0
+opencv-python-headless==4.8.1.78
