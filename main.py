@@ -27,7 +27,7 @@ functions.set_bot_username(BOT_USERNAME)
 MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
 
-db = client["xanimelar_bot"]
+db = client["AniComplex"]
 contents = db["contents"]
 required_channels_collection = db["required_channels"]
 optional_channels_collection = db["optional_channels"]
@@ -44,7 +44,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "XAnimelarBot is running!"
+    return "AniComplexBot faol ishlamoqda!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
