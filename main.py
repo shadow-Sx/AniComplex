@@ -27,7 +27,7 @@ functions.set_bot_username(BOT_USERNAME)
 MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
 
-db = client["AniComplex"]
+db = client["anìcomplex"]
 contents = db["contents"]
 required_channels_collection = db["required_channels"]
 optional_channels_collection = db["optional_channels"]
@@ -44,7 +44,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "AniComplexBot faol ishlamoqda!"
+    return "XAnimelarBot is running!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -56,7 +56,7 @@ def webhook():
 def keep_alive():
     while True:
         try:
-            requests.get("https://yuklovchi-bot-5kne.onrender.com")
+            requests.get("https://anicomplex.onrender.com")
         except:
             pass
         time.sleep(60)
