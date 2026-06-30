@@ -27,6 +27,8 @@ functions.set_bot_username(BOT_USERNAME)
 # TO'G'RILANGAN MONGO_URI - protokol va format tuzatildi
 MONGO_URI = os.getenv("MONGO_URI")
 if not MONGO_URI:
+    # Agar environment variable bo'sh bo'lsa, to'g'ridan-to'g'ri yozing
+    MONGO_URI = "mongodb+srv://ShadowUzDev:ShadowUzDevAnimeshnik@cluster0.vudnhub.mongodb.net/?retryWrites=true&w=majority&appName=AniComplex"
 
 try:
     client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
