@@ -24,10 +24,26 @@ bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 functions.set_bot_username(BOT_USERNAME)
 
 # ==================== MONGO DB CONNECTION ====================
+# TO'G'RILANGAN MONGO_URI - protokol va format tuzatildi
 MONGO_URI = os.getenv("MONGO_URI")
-client = MongoClient(MONGO_URI)
+if not MONGO_URI:
+    # Agar environment variable bo'sh bo'lsa, to'g'ridan-to'g'ri yozing
+    MONGO_URI = "mongodb+srv://ShadowUzDev:ShadowUzDevAnimeshnik@cluster0.vudnhub.mongodb.net/?retryWrites=true&w=majority&appName=AniComplex"
 
-db = client["anìcomplex"]
+try:
+    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    # Ulanishni tekshirish
+    client.admin.command('ping')
+    print("✅ MongoDB ga muvaffaqiyatli ulandi!")
+except Exception as e:
+    print(f"❌ MongoDB ulanish xatosi: {e}")
+    # Agar ulana olmasa, bot ishlamasligi uchun xatoni ko'taramiz
+    raise
+
+# Database nomi - lotin harflarida, "AniComplex" deb nomlandi
+db = client["AniComplex"]
+
+# Kolleksiyalar
 contents = db["contents"]
 required_channels_collection = db["required_channels"]
 optional_channels_collection = db["optional_channels"]
@@ -39,12 +55,22 @@ required_bots_collection = db["required_bots"]
 join_requests_collection = db["join_requests"]
 ads_collection = db["ads"]
 
+# Kolleksiyalarni tekshirish
+print(f"📊 Kolleksiyalar soni: {len(db.list_collection_names())}")
+print(f"📋 Mavjud kolleksiyalar: {db.list_collection_names()}")
+
 # ==================== FLASK SERVER ====================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "XAnimelarBot is running!"
+    try:
+        # MongoDB ulanishini tekshirish
+        client.admin.command('ping')
+        db_status = "✅ MongoDB ulangan"
+    except:
+        db_status = "❌ MongoDB ulanmagan"
+    return f"AniComplex Bot is running! | DB: {db_status}"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -61,7 +87,7 @@ def keep_alive():
             pass
         time.sleep(60)
 
-threading.Thread(target=keep_alive).start()
+threading.Thread(target=keep_alive, daemon=True).start()
 
 def generate_code(length=12):
     return ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(length))
@@ -112,10 +138,21 @@ def admin_start(message):
     if message.from_user.id != ADMIN_ID:
         bot.reply_to(message, "❌ Siz admin emassiz!")
         return
-    users_collection.update_one({"user_id": message.from_user.id},
-                                {"$set": {"user_id": message.from_user.id}}, upsert=True)
+    # MongoDB ga saqlashda xatolik bo'lsa ham davom etish
+    try:
+        users_collection.update_one(
+            {"user_id": message.from_user.id},
+            {"$set": {"user_id": message.from_user.id}},
+            upsert=True
+        )
+    except Exception as e:
+        print(f"⚠️ Foydalanuvchini saqlashda xatolik: {e}")
+    
     sent = bot.reply_to(message, "⚙️ Admin panelga xush kelibsiz!", reply_markup=admin_panel())
-    functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "👑")
+    try:
+        functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "👑")
+    except:
+        pass
 
 @bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID and m.text in [
     "Cantent Qo'shish", "Majburi Obuna", "Habar Yuborish", "Referal",
@@ -200,21 +237,26 @@ def receive_advertisement(message):
         "impressions": 0,
         "buttons": []
     }
-    # Agar forward qilingan bo'lsa, asl manbani olish
     if message.forward_from_chat:
         ad_data["chat_id"] = message.forward_from_chat.id
         ad_data["message_id"] = message.forward_from_message_id
 
-    ads_collection.insert_one(ad_data)
-    bot.reply_to(message, "✅ Reklama muvaffaqiyatli saqlandi!")
+    try:
+        ads_collection.insert_one(ad_data)
+        bot.reply_to(message, "✅ Reklama muvaffaqiyatli saqlandi!")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Saqlashda xatolik: {e}")
     admin_state.pop(uid, None)
 
 # ==================== DELETE MAIN IMAGE ====================
 @bot.callback_query_handler(func=lambda c: c.data == "delete_main_image")
 def delete_main_image(call):
-    bot_settings_collection.delete_one({"setting": "main_image"})
-    bot.edit_message_text("✅ Rasm o'chirildi! Endi majburiy obuna xabari rasm bilan chiqmaydi.",
-                          call.message.chat.id, call.message.message_id)
+    try:
+        bot_settings_collection.delete_one({"setting": "main_image"})
+        bot.edit_message_text("✅ Rasm o'chirildi! Endi majburiy obuna xabari rasm bilan chiqmaydi.",
+                              call.message.chat.id, call.message.message_id)
+    except Exception as e:
+        bot.answer_callback_query(call.id, f"❌ Xatolik: {e}")
 
 # ==================== MAIN IMAGE SETUP ====================
 @bot.message_handler(content_types=['photo'])
@@ -229,10 +271,16 @@ def handle_photo(message):
 def save_main_image(message):
     uid = message.from_user.id
     file_id = message.photo[-1].file_id
-    bot_settings_collection.update_one({"setting": "main_image"},
-                                       {"$set": {"image_id": file_id}}, upsert=True)
-    sent = bot.reply_to(message, "✅ Rasm saqlandi! Endi majburiy obuna xabari rasm bilan chiqadi.")
-    functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "✅")
+    try:
+        bot_settings_collection.update_one(
+            {"setting": "main_image"},
+            {"$set": {"image_id": file_id}},
+            upsert=True
+        )
+        sent = bot.reply_to(message, "✅ Rasm saqlandi! Endi majburiy obuna xabari rasm bilan chiqadi.")
+        functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "✅")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Rasm saqlashda xatolik: {e}")
     admin_state[uid] = None
 
 # ==================== REFERRAL SYSTEM ====================
@@ -247,15 +295,25 @@ def referral_add(call):
 
 @bot.callback_query_handler(func=lambda c: c.data == "referral_stats")
 def referral_stats(call):
-    referrals = list(referrals_collection.find({}))
+    try:
+        referrals = list(referrals_collection.find({}))
+    except Exception as e:
+        bot.edit_message_text(f"❌ Ma'lumot olishda xatolik: {e}",
+                              call.message.chat.id, call.message.message_id)
+        return
+    
     if not referrals:
         bot.edit_message_text("📊 Referallar mavjud emas.",
                               call.message.chat.id, call.message.message_id)
         return
+    
     text = "📊 <b>Referallar statistikasi</b>\n\n"
     kb = InlineKeyboardMarkup()
     for ref in referrals:
-        count = user_referrals_collection.count_documents({"referral_name": ref["name"]})
+        try:
+            count = user_referrals_collection.count_documents({"referral_name": ref["name"]})
+        except:
+            count = 0
         text += f"• <b>{ref['name']}</b>: {count} ta foydalanuvchi\n"
         kb.add(InlineKeyboardButton(f"🗑 {ref['name']}", callback_data=f"del_ref:{ref['name']}"))
     kb.add(InlineKeyboardButton("🔙 Orqaga", callback_data="referral_back"))
@@ -272,15 +330,19 @@ def referral_save_name(message):
     if len(name) < 3 or len(name) > 20:
         bot.reply_to(message, "❌ Nom 3-20 belgi orasida bo'lishi kerak!")
         return
-    if referrals_collection.find_one({"name": name}):
-        bot.reply_to(message, "❌ Bunday nomli referal allaqachon mavjud!")
-        return
-    referrals_collection.insert_one({"name": name, "created_at": time.time()})
-    sent = bot.reply_to(message,
-        f"✅ <b>{name}</b> referali yaratildi!\n\n"
-        f"Havola: <code>https://t.me/{BOT_USERNAME}?start=ref_{name}</code>",
-        parse_mode="HTML")
-    functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "✅")
+    
+    try:
+        if referrals_collection.find_one({"name": name}):
+            bot.reply_to(message, "❌ Bunday nomli referal allaqachon mavjud!")
+            return
+        referrals_collection.insert_one({"name": name, "created_at": time.time()})
+        sent = bot.reply_to(message,
+            f"✅ <b>{name}</b> referali yaratildi!\n\n"
+            f"Havola: <code>https://t.me/{BOT_USERNAME}?start=ref_{name}</code>",
+            parse_mode="HTML")
+        functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "✅")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Saqlashda xatolik: {e}")
     admin_state[uid] = None
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("del_ref:"))
@@ -295,10 +357,14 @@ def delete_referral_confirm(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("del_ref_yes:"))
 def delete_referral_yes(call):
     ref_name = call.data.split(":")[1]
-    referrals_collection.delete_one({"name": ref_name})
-    user_referrals_collection.delete_many({"referral_name": ref_name})
-    bot.edit_message_text(f"✅ <b>{ref_name}</b> referali o'chirildi!",
-                          call.message.chat.id, call.message.message_id, parse_mode="HTML")
+    try:
+        referrals_collection.delete_one({"name": ref_name})
+        user_referrals_collection.delete_many({"referral_name": ref_name})
+        bot.edit_message_text(f"✅ <b>{ref_name}</b> referali o'chirildi!",
+                              call.message.chat.id, call.message.message_id, parse_mode="HTML")
+    except Exception as e:
+        bot.edit_message_text(f"❌ O'chirishda xatolik: {e}",
+                              call.message.chat.id, call.message.message_id)
     referral_stats(call)
 
 @bot.callback_query_handler(func=lambda c: c.data == "referral_back")
@@ -397,7 +463,13 @@ def broadcast_final_confirm(call):
     buttons = data.get("buttons")
     markup = InlineKeyboardMarkup(buttons) if buttons else None
 
-    users = users_collection.find({})
+    try:
+        users = list(users_collection.find({}))
+    except Exception as e:
+        bot.edit_message_text(f"❌ Foydalanuvchilarni olishda xatolik: {e}",
+                              call.message.chat.id, call.message.message_id)
+        return
+
     success = 0
     fail = 0
     status_msg = bot.edit_message_text("⏳ Xabar yuborilmoqda...",
@@ -430,10 +502,14 @@ def broadcast_final_confirm(call):
         except Exception as e:
             fail += 1
             print(f"Broadcast xatolik {u.get('user_id')}: {e}")
+    
     bot.edit_message_text(
         f"✅ Xabar yuborildi!\n\n✅ Muvaffaqiyatli: {success}\n❌ Xatolik: {fail}",
         call.message.chat.id, call.message.message_id)
-    functions.add_premium_reaction(bot, call.message.chat.id, call.message.message_id, "📨")
+    try:
+        functions.add_premium_reaction(bot, call.message.chat.id, call.message.message_id, "📨")
+    except:
+        pass
     broadcast_state.pop(uid, None)
 
 @bot.callback_query_handler(func=lambda c: c.data == "broadcast_cancel")
@@ -452,11 +528,19 @@ def button_add_code(message):
         code = text.split("?start=")[-1].split()[0].split("&")[0]
     else:
         code = text
-    items = list(contents.find({"code": code}))
+    
+    try:
+        items = list(contents.find({"code": code}))
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ma'lumot olishda xatolik: {e}")
+        add_button_state.pop(uid, None)
+        return
+    
     if not items:
         bot.reply_to(message, "❌ Bunday kodli kontent topilmadi!")
         add_button_state.pop(uid, None)
         return
+    
     add_button_state[uid] = {"step": "waiting_buttons", "code": code}
     bot.reply_to(message,
         "✅ Kod qabul qilindi!\n\nEndi tugmalarni quyidagi formatda yuboring:\n\n"
@@ -492,16 +576,21 @@ def button_add_buttons(message):
     if not buttons:
         bot.reply_to(message, "❌ Hech qanday to'g'ri formatdagi tugma topilmadi!")
         return
+    
     serializable_buttons = []
     for row in buttons:
         serializable_buttons.append([{"text": btn.text, "url": btn.url} for btn in row])
-    contents.update_many({"code": code}, {"$set": {"buttons": serializable_buttons}})
-    kb = InlineKeyboardMarkup(buttons)
-    sent = bot.reply_to(message,
-        f"✅ Tugmalar muvaffaqiyatli qo'shildi!\n\n"
-        f"Kod: <code>{code}</code>\nJami kontentlar soni: {contents.count_documents({'code': code})}",
-        reply_markup=kb, parse_mode="HTML")
-    functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "✅")
+    
+    try:
+        contents.update_many({"code": code}, {"$set": {"buttons": serializable_buttons}})
+        kb = InlineKeyboardMarkup(buttons)
+        sent = bot.reply_to(message,
+            f"✅ Tugmalar muvaffaqiyatli qo'shildi!\n\n"
+            f"Kod: <code>{code}</code>\nJami kontentlar soni: {contents.count_documents({'code': code})}",
+            reply_markup=kb, parse_mode="HTML")
+        functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "✅")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Tugmalarni saqlashda xatolik: {e}")
     add_button_state.pop(uid, None)
 
 # ==================== MULTI MODE TANLASH ====================
@@ -556,20 +645,24 @@ def save_multi(message):
         item["file_id"] = message.video_note.file_id
     else:
         item["text"] = message.text
-    if state == "multi_add_single":
-        code = generate_code()
-        item["code"] = code
-        contents.insert_one(item)
-        link = f"https://t.me/{BOT_USERNAME}?start={code}"
-        sent = bot.reply_to(message, link)
-        functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "✅")
-    else:
-        batch = admin_data[uid].get("batch", [])
-        item["order"] = len(batch) + 1
-        batch.append(item)
-        admin_data[uid]["batch"] = batch
-        sent = bot.reply_to(message, f"✅ {len(batch)}-kontent qabul qilindi.")
-        functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "✅")
+    
+    try:
+        if state == "multi_add_single":
+            code = generate_code()
+            item["code"] = code
+            contents.insert_one(item)
+            link = f"https://t.me/{BOT_USERNAME}?start={code}"
+            sent = bot.reply_to(message, link)
+            functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "✅")
+        else:
+            batch = admin_data[uid].get("batch", [])
+            item["order"] = len(batch) + 1
+            batch.append(item)
+            admin_data[uid]["batch"] = batch
+            sent = bot.reply_to(message, f"✅ {len(batch)}-kontent qabul qilindi.")
+            functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "✅")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Saqlashda xatolik: {e}")
 
 @bot.message_handler(commands=['stop'])
 def stop(message):
@@ -593,10 +686,13 @@ def stop(message):
             else:
                 doc["text"] = item.get("text")
             docs.append(doc)
-        contents.insert_many(docs)
-        link = f"https://t.me/{BOT_USERNAME}?start={code}"
-        sent = bot.reply_to(message, link)
-        functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "✅")
+        try:
+            contents.insert_many(docs)
+            link = f"https://t.me/{BOT_USERNAME}?start={code}"
+            sent = bot.reply_to(message, link)
+            functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "✅")
+        except Exception as e:
+            bot.reply_to(message, f"❌ Kontentlarni saqlashda xatolik: {e}")
         admin_state[uid] = None
         admin_data[uid] = {}
         return
@@ -640,8 +736,8 @@ def req_get_url(message):
         if member.status not in ["administrator", "creator"]:
             bot.reply_to(message, "❌ Bot kanalda admin emas.")
             return
-    except:
-        bot.reply_to(message, "❌ Kanalga ulanib bo'lmadi.")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Kanalga ulanib bo'lmadi: {e}")
         return
     admin_data[uid]["url"] = url
     admin_state[uid] = "req_add_count"
@@ -666,20 +762,24 @@ def req_auto_name(call):
     uid = call.from_user.id
     if admin_state.get(uid) != "req_add_name":
         return
-    auto_channels = list(required_channels_collection.find({"auto": True}))
-    auto_channels.sort(key=lambda x: x.get("name", ""))
-    auto_name = f"{len(auto_channels) + 1}-Kanal"
-    data = admin_data[uid]
-    new_channel = {
-        "name": auto_name,
-        "channel_id": data["channel_id"],
-        "url": data["url"],
-        "count": data["count"],
-        "auto": True
-    }
-    required_channels_collection.insert_one(new_channel)
-    bot.edit_message_text(f"✅ <b>{auto_name}</b> muvaffaqiyatli qo'shildi!",
-                          call.message.chat.id, call.message.message_id, parse_mode="HTML")
+    try:
+        auto_channels = list(required_channels_collection.find({"auto": True}))
+        auto_channels.sort(key=lambda x: x.get("name", ""))
+        auto_name = f"{len(auto_channels) + 1}-Kanal"
+        data = admin_data[uid]
+        new_channel = {
+            "name": auto_name,
+            "channel_id": data["channel_id"],
+            "url": data["url"],
+            "count": data["count"],
+            "auto": True
+        }
+        required_channels_collection.insert_one(new_channel)
+        bot.edit_message_text(f"✅ <b>{auto_name}</b> muvaffaqiyatli qo'shildi!",
+                              call.message.chat.id, call.message.message_id, parse_mode="HTML")
+    except Exception as e:
+        bot.edit_message_text(f"❌ Saqlashda xatolik: {e}",
+                              call.message.chat.id, call.message.message_id)
     admin_state[uid] = None
     admin_data[uid] = {}
 
@@ -695,9 +795,12 @@ def req_custom_name(message):
         "count": data["count"],
         "auto": False
     }
-    required_channels_collection.insert_one(new_channel)
-    sent = bot.reply_to(message, f"✅ <b>{name}</b> muvaffaqiyatli qo'shildi!", parse_mode="HTML")
-    functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "➕")
+    try:
+        required_channels_collection.insert_one(new_channel)
+        sent = bot.reply_to(message, f"✅ <b>{name}</b> muvaffaqiyatli qo'shildi!", parse_mode="HTML")
+        functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "➕")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Saqlashda xatolik: {e}")
     admin_state[uid] = None
     admin_data[uid] = {}
 
@@ -723,9 +826,12 @@ def opt_get_url(message):
     uid = message.from_user.id
     name = admin_data[uid]["name"]
     url = message.text.strip()
-    optional_channels_collection.insert_one({"name": name, "url": url})
-    sent = bot.reply_to(message, f"✅ Ixtiyoriy kanal <b>{name}</b> qo'shildi!", parse_mode="HTML")
-    functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "➕")
+    try:
+        optional_channels_collection.insert_one({"name": name, "url": url})
+        sent = bot.reply_to(message, f"✅ Ixtiyoriy kanal <b>{name}</b> qo'shildi!", parse_mode="HTML")
+        functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "➕")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Saqlashda xatolik: {e}")
     admin_state[uid] = None
     admin_data[uid] = {}
 
@@ -775,18 +881,22 @@ def bot_auto_name(call):
     uid = call.from_user.id
     if admin_state.get(uid) != "bot_add_name_final":
         return
-    auto_bots = list(required_bots_collection.find({}))
-    auto_name = f"{len(auto_bots) + 1}-Bot"
-    data = admin_data[uid]
-    new_bot = {
-        "name": auto_name,
-        "bot_username": data["bot_username"],
-        "count": data["count"],
-        "auto": True
-    }
-    required_bots_collection.insert_one(new_bot)
-    bot.edit_message_text(f"✅ <b>{auto_name}</b> muvaffaqiyatli qo'shildi!",
-                          call.message.chat.id, call.message.message_id, parse_mode="HTML")
+    try:
+        auto_bots = list(required_bots_collection.find({}))
+        auto_name = f"{len(auto_bots) + 1}-Bot"
+        data = admin_data[uid]
+        new_bot = {
+            "name": auto_name,
+            "bot_username": data["bot_username"],
+            "count": data["count"],
+            "auto": True
+        }
+        required_bots_collection.insert_one(new_bot)
+        bot.edit_message_text(f"✅ <b>{auto_name}</b> muvaffaqiyatli qo'shildi!",
+                              call.message.chat.id, call.message.message_id, parse_mode="HTML")
+    except Exception as e:
+        bot.edit_message_text(f"❌ Saqlashda xatolik: {e}",
+                              call.message.chat.id, call.message.message_id)
     admin_state[uid] = None
     admin_data[uid] = {}
 
@@ -801,16 +911,25 @@ def bot_custom_name(message):
         "count": data["count"],
         "auto": False
     }
-    required_bots_collection.insert_one(new_bot)
-    sent = bot.reply_to(message, f"✅ <b>{name}</b> muvaffaqiyatli qo'shildi!", parse_mode="HTML")
-    functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "🤖")
+    try:
+        required_bots_collection.insert_one(new_bot)
+        sent = bot.reply_to(message, f"✅ <b>{name}</b> muvaffaqiyatli qo'shildi!", parse_mode="HTML")
+        functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "🤖")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Saqlashda xatolik: {e}")
     admin_state[uid] = None
     admin_data[uid] = {}
 
 # ==================== TAHRIRLASH VA O'CHIRISH ====================
 @bot.callback_query_handler(func=lambda c: c.data == "req_edit")
 def start_required_edit(call):
-    channels = list(required_channels_collection.find({}))
+    try:
+        channels = list(required_channels_collection.find({}))
+    except Exception as e:
+        bot.edit_message_text(f"❌ Ma'lumot olishda xatolik: {e}",
+                              call.message.chat.id, call.message.message_id)
+        return
+    
     if not channels:
         bot.edit_message_text("❌ Majburiy kanallar yo'q.",
                               call.message.chat.id, call.message.message_id)
@@ -825,7 +944,12 @@ def start_required_edit(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("edit_req:"))
 def edit_required_menu(call):
     ch_id = call.data.split(":")[1]
-    channel = required_channels_collection.find_one({"_id": ObjectId(ch_id)})
+    try:
+        channel = required_channels_collection.find_one({"_id": ObjectId(ch_id)})
+    except:
+        bot.answer_callback_query(call.id, "❌ Kanal topilmadi.")
+        return
+    
     if not channel:
         bot.answer_callback_query(call.id, "❌ Kanal topilmadi.")
         return
@@ -840,8 +964,14 @@ def edit_required_menu(call):
 
 @bot.callback_query_handler(func=lambda c: c.data == "req_delete")
 def start_required_delete(call):
-    req = list(required_channels_collection.find({}))
-    opt = list(optional_channels_collection.find({}))
+    try:
+        req = list(required_channels_collection.find({}))
+        opt = list(optional_channels_collection.find({}))
+    except Exception as e:
+        bot.edit_message_text(f"❌ Ma'lumot olishda xatolik: {e}",
+                              call.message.chat.id, call.message.message_id)
+        return
+    
     kb = InlineKeyboardMarkup()
     if req:
         kb.add(InlineKeyboardButton("📛 Majburiy kanallar", callback_data="del_req_list"))
@@ -853,7 +983,13 @@ def start_required_delete(call):
 
 @bot.callback_query_handler(func=lambda c: c.data == "del_req_list")
 def delete_required_list(call):
-    channels = list(required_channels_collection.find({}))
+    try:
+        channels = list(required_channels_collection.find({}))
+    except Exception as e:
+        bot.edit_message_text(f"❌ Ma'lumot olishda xatolik: {e}",
+                              call.message.chat.id, call.message.message_id)
+        return
+    
     if not channels:
         bot.edit_message_text("❌ Majburiy kanallar yo'q.",
                               call.message.chat.id, call.message.message_id)
@@ -868,7 +1004,12 @@ def delete_required_list(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("del_req_confirm:"))
 def delete_required_confirm(call):
     ch_id = call.data.split(":")[1]
-    ch = required_channels_collection.find_one({"_id": ObjectId(ch_id)})
+    try:
+        ch = required_channels_collection.find_one({"_id": ObjectId(ch_id)})
+    except:
+        bot.answer_callback_query(call.id, "❌ Kanal topilmadi.")
+        return
+    
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("✅ Ha, o'chirish", callback_data=f"del_req_yes:{ch_id}"),
            InlineKeyboardButton("❌ Yo'q", callback_data="del_req_list"))
@@ -879,22 +1020,32 @@ def delete_required_confirm(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("del_req_yes:"))
 def delete_required_yes(call):
     ch_id = call.data.split(":")[1]
-    required_channels_collection.delete_one({"_id": ObjectId(ch_id)})
-    # Avto nomlangan kanallarni qayta raqamlash
-    auto_channels = list(required_channels_collection.find({"auto": True}))
-    auto_channels.sort(key=lambda x: x.get("name", ""))
-    for i, ch in enumerate(auto_channels):
-        required_channels_collection.update_one(
-            {"_id": ch["_id"]},
-            {"$set": {"name": f"{i+1}-Kanal"}}
-        )
-    bot.edit_message_text("✅ Kanal o'chirildi!",
-                          call.message.chat.id, call.message.message_id)
+    try:
+        required_channels_collection.delete_one({"_id": ObjectId(ch_id)})
+        # Avto nomlangan kanallarni qayta raqamlash
+        auto_channels = list(required_channels_collection.find({"auto": True}))
+        auto_channels.sort(key=lambda x: x.get("name", ""))
+        for i, ch in enumerate(auto_channels):
+            required_channels_collection.update_one(
+                {"_id": ch["_id"]},
+                {"$set": {"name": f"{i+1}-Kanal"}}
+            )
+        bot.edit_message_text("✅ Kanal o'chirildi!",
+                              call.message.chat.id, call.message.message_id)
+    except Exception as e:
+        bot.edit_message_text(f"❌ O'chirishda xatolik: {e}",
+                              call.message.chat.id, call.message.message_id)
     delete_required_list(call)
 
 @bot.callback_query_handler(func=lambda c: c.data == "del_opt_list")
 def delete_optional_list(call):
-    channels = list(optional_channels_collection.find({}))
+    try:
+        channels = list(optional_channels_collection.find({}))
+    except Exception as e:
+        bot.edit_message_text(f"❌ Ma'lumot olishda xatolik: {e}",
+                              call.message.chat.id, call.message.message_id)
+        return
+    
     if not channels:
         bot.edit_message_text("❌ Ixtiyoriy kanallar yo'q.",
                               call.message.chat.id, call.message.message_id)
@@ -909,7 +1060,12 @@ def delete_optional_list(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("del_opt_confirm:"))
 def delete_optional_confirm(call):
     ch_id = call.data.split(":")[1]
-    ch = optional_channels_collection.find_one({"_id": ObjectId(ch_id)})
+    try:
+        ch = optional_channels_collection.find_one({"_id": ObjectId(ch_id)})
+    except:
+        bot.answer_callback_query(call.id, "❌ Kanal topilmadi.")
+        return
+    
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("✅ Ha, o'chirish", callback_data=f"del_opt_yes:{ch_id}"),
            InlineKeyboardButton("❌ Yo'q", callback_data="del_opt_list"))
@@ -920,9 +1076,13 @@ def delete_optional_confirm(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("del_opt_yes:"))
 def delete_optional_yes(call):
     ch_id = call.data.split(":")[1]
-    optional_channels_collection.delete_one({"_id": ObjectId(ch_id)})
-    bot.edit_message_text("✅ Kanal o'chirildi!",
-                          call.message.chat.id, call.message.message_id)
+    try:
+        optional_channels_collection.delete_one({"_id": ObjectId(ch_id)})
+        bot.edit_message_text("✅ Kanal o'chirildi!",
+                              call.message.chat.id, call.message.message_id)
+    except Exception as e:
+        bot.edit_message_text(f"❌ O'chirishda xatolik: {e}",
+                              call.message.chat.id, call.message.message_id)
     delete_optional_list(call)
 
 @bot.callback_query_handler(func=lambda c: c.data == "req_back")
@@ -968,7 +1128,10 @@ def zayavka_get_channel_id(message):
         zayavka_state.pop(uid, None)
         return
 
-    pending_count = join_requests_collection.count_documents({"channel_id": channel_id})
+    try:
+        pending_count = join_requests_collection.count_documents({"channel_id": channel_id})
+    except:
+        pending_count = 0
 
     zayavka_state[uid] = {
         "step": "waiting_count",
@@ -997,9 +1160,14 @@ def zayavka_approve(message):
     channel_id = data["channel_id"]
     channel_title = data["channel_title"]
 
-    pending = list(join_requests_collection.find(
-        {"channel_id": channel_id}
-    ).sort("timestamp", 1).limit(count))
+    try:
+        pending = list(join_requests_collection.find(
+            {"channel_id": channel_id}
+        ).sort("timestamp", 1).limit(count))
+    except Exception as e:
+        bot.reply_to(message, f"❌ Zayavkalarni olishda xatolik: {e}")
+        zayavka_state.pop(uid, None)
+        return
 
     if not pending:
         bot.reply_to(message, "⚠️ Bu kanalda kutilayotgan zayavka qolmagan.")
@@ -1016,7 +1184,7 @@ def zayavka_approve(message):
             bot.approve_chat_join_request(channel_id, user_id)
             approved += 1
             try:
-                send_ad(user_id)   # reklama yuborish
+                send_ad(user_id)
             except:
                 pass
             if (idx + 1) % 5 == 0 or (idx + 1) == actual_count:
@@ -1041,7 +1209,11 @@ def zayavka_approve(message):
 
 # ==================== MAJBURIY OBUNA TEKSHIRISH ====================
 def check_required_subs(user_id):
-    required = list(required_channels_collection.find({}))
+    try:
+        required = list(required_channels_collection.find({}))
+    except:
+        return True
+    
     for ch in required:
         channel_id = ch["channel_id"]
         try:
@@ -1050,13 +1222,20 @@ def check_required_subs(user_id):
                 continue
         except:
             pass
-        if join_requests_collection.find_one({"user_id": user_id, "channel_id": channel_id}):
-            continue
+        try:
+            if join_requests_collection.find_one({"user_id": user_id, "channel_id": channel_id}):
+                continue
+        except:
+            pass
         return False
     return True
 
 def check_required_bots(user_id):
-    required = list(required_bots_collection.find({}))
+    try:
+        required = list(required_bots_collection.find({}))
+    except:
+        return True
+    
     for bot_info in required:
         try:
             member = bot.get_chat_member(f"@{bot_info['bot_username']}", user_id)
@@ -1067,8 +1246,12 @@ def check_required_bots(user_id):
     return True
 
 def get_required_keyboard(user_id, code):
-    required = list(required_channels_collection.find({}))
-    optional = list(optional_channels_collection.find({}))
+    try:
+        required = list(required_channels_collection.find({}))
+        optional = list(optional_channels_collection.find({}))
+    except:
+        required = []
+        optional = []
 
     unsubscribed = []
     for ch in required:
@@ -1081,8 +1264,11 @@ def get_required_keyboard(user_id, code):
         except:
             pass
         if not is_member:
-            if join_requests_collection.find_one({"user_id": user_id, "channel_id": channel_id}):
-                continue
+            try:
+                if join_requests_collection.find_one({"user_id": user_id, "channel_id": channel_id}):
+                    continue
+            except:
+                pass
             unsubscribed.append(ch)
 
     unsubscribed.sort(key=lambda x: x.get("name", ""))
@@ -1090,7 +1276,7 @@ def get_required_keyboard(user_id, code):
     kb_buttons = []
     auto_count = 0
     for ch in unsubscribed:
-        if ch.get("auto"):   # avto nomlangan
+        if ch.get("auto"):
             auto_count += 1
             display_name = f"{auto_count}-Kanal"
         else:
@@ -1109,7 +1295,11 @@ def get_required_keyboard(user_id, code):
     return kb
 
 def get_required_bots_keyboard(user_id, code):
-    required = list(required_bots_collection.find({}))
+    try:
+        required = list(required_bots_collection.find({}))
+    except:
+        required = []
+    
     buttons = []
     for bot_info in required:
         try:
@@ -1129,11 +1319,19 @@ def get_required_bots_keyboard(user_id, code):
 
 # ==================== REKLAMA ====================
 def send_ad(chat_id):
-    ads = list(ads_collection.find({}))
+    try:
+        ads = list(ads_collection.find({}))
+    except:
+        return
+    
     if not ads:
         return
     ad = random.choice(ads)
-    ads_collection.update_one({"_id": ad["_id"]}, {"$inc": {"impressions": 1}})
+    try:
+        ads_collection.update_one({"_id": ad["_id"]}, {"$inc": {"impressions": 1}})
+    except:
+        pass
+    
     markup = None
     if ad.get("buttons"):
         rows = [[InlineKeyboardButton(b["text"], url=b["url"]) for b in row] for row in ad["buttons"]]
@@ -1150,6 +1348,7 @@ def send_content(chat_id, items, is_batch=False):
         markup = InlineKeyboardMarkup(rows)
 
     for item in items:
+        msg = None
         try:
             if item["type"] == "text":
                 msg = bot.send_message(chat_id, item["text"], reply_markup=markup)
@@ -1169,22 +1368,31 @@ def send_content(chat_id, items, is_batch=False):
                 msg = bot.send_video_note(chat_id, item["file_id"], reply_markup=markup)
             if msg:
                 schedule_delete(chat_id, msg.message_id, 1800)
-        except:
-            pass
+        except Exception as e:
+            print(f"Kontent yuborishda xatolik: {e}")
 
-    warn = bot.send_message(chat_id,
-        "<b>⚠️ ESLATMA ⚠️\n<blockquote>❗ Ushbu habarlar Mualiflik huquqi sababli 30 daqiqadan so'ng o'chiriladi.</blockquote></b>")
-    schedule_delete(chat_id, warn.message_id, 1800)
+    try:
+        warn = bot.send_message(chat_id,
+            "<b>⚠️ ESLATMA ⚠️\n<blockquote>❗ Ushbu habarlar Mualiflik huquqi sababli 30 daqiqadan so'ng o'chiriladi.</blockquote></b>")
+        schedule_delete(chat_id, warn.message_id, 1800)
+    except:
+        pass
 
-    user = users_collection.find_one({"user_id": chat_id})
-    count = user.get("content_count", 0) + (len(items) if is_batch else 1)
-    users_collection.update_one({"user_id": chat_id}, {"$set": {"content_count": count}})
+    try:
+        user = users_collection.find_one({"user_id": chat_id})
+        count = user.get("content_count", 0) + (len(items) if is_batch else 1) if user else (len(items) if is_batch else 1)
+        users_collection.update_one({"user_id": chat_id}, {"$set": {"content_count": count}}, upsert=True)
+    except:
+        return
 
-    threshold_doc = bot_settings_collection.find_one({"setting": "ad_threshold"})
-    threshold = threshold_doc["value"] if threshold_doc else 10
-    if count >= threshold:
-        send_ad(chat_id)
-        users_collection.update_one({"user_id": chat_id}, {"$set": {"content_count": 0}})
+    try:
+        threshold_doc = bot_settings_collection.find_one({"setting": "ad_threshold"})
+        threshold = threshold_doc["value"] if threshold_doc else 10
+        if count >= threshold:
+            send_ad(chat_id)
+            users_collection.update_one({"user_id": chat_id}, {"$set": {"content_count": 0}})
+    except:
+        pass
 
 def schedule_delete(chat_id, message_id, delay=300):
     def _delete():
@@ -1198,7 +1406,11 @@ def schedule_delete(chat_id, message_id, delay=300):
 @bot.message_handler(commands=['start'])
 def start(message):
     uid = message.from_user.id
-    users_collection.update_one({"user_id": uid}, {"$set": {"user_id": uid}}, upsert=True)
+    try:
+        users_collection.update_one({"user_id": uid}, {"$set": {"user_id": uid}}, upsert=True)
+    except:
+        pass
+    
     args = message.text.split()
     if len(args) == 1:
         markup = InlineKeyboardMarkup()
@@ -1207,35 +1419,50 @@ def start(message):
         sent = bot.reply_to(message,
             "<b>Bu bot orqali kanaldagi animelarni yuklab olishingiz mumkin.\n\n❗️Botga habar yozmang❗️</b>",
             reply_markup=markup)
-        functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "🎉")
+        try:
+            functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "🎉")
+        except:
+            pass
         return
 
     code = args[1]
     if code.startswith("ref_"):
         ref_name = code[4:]
-        referral = referrals_collection.find_one({"name": ref_name})
-        if referral:
-            user = users_collection.find_one({"user_id": uid})
-            if not user:
-                user_referrals_collection.update_one({"user_id": uid},
-                    {"$set": {"referral_name": ref_name}}, upsert=True)
+        try:
+            referral = referrals_collection.find_one({"name": ref_name})
+            if referral:
+                user = users_collection.find_one({"user_id": uid})
+                if not user:
+                    user_referrals_collection.update_one({"user_id": uid},
+                        {"$set": {"referral_name": ref_name}}, upsert=True)
+        except:
+            pass
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("📝 Bot Haqida", callback_data="about"),
                    InlineKeyboardButton("🔒 Yopish", callback_data=f"close:{message.message_id}"))
         sent = bot.reply_to(message,
             "<b>Bu bot orqali kanaldagi animelarni yuklab olishingiz mumkin.\n\n❗️Botga habar yozmang❗️</b>",
             reply_markup=markup)
-        functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "🎉")
+        try:
+            functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "🎉")
+        except:
+            pass
         return
 
-    items = list(contents.find({"code": code}).sort("order", 1))
+    try:
+        items = list(contents.find({"code": code}).sort("order", 1))
+    except:
+        items = []
+    
     if not items:
         sent = bot.send_message(message.chat.id, "")
-        functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "❌")
+        try:
+            functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "❌")
+        except:
+            pass
         return
 
     if not check_required_subs(uid):
-        # Eski ogohlantirish xabarini o‘chirish
         if uid in last_prompt_msg:
             try:
                 bot.delete_message(message.chat.id, last_prompt_msg[uid])
@@ -1243,7 +1470,11 @@ def start(message):
                 pass
             del last_prompt_msg[uid]
 
-        settings = bot_settings_collection.find_one({"setting": "main_image"})
+        try:
+            settings = bot_settings_collection.find_one({"setting": "main_image"})
+        except:
+            settings = None
+        
         kb = get_required_keyboard(uid, code)
         if settings and settings.get("image_id"):
             sent = bot.send_photo(message.chat.id, settings["image_id"],
@@ -1254,10 +1485,12 @@ def start(message):
                 "📢 <b>Animeni yuklab olish uchun quyidagi kanallarga obuna bo'ling:</b>",
                 reply_markup=kb)
         last_prompt_msg[uid] = sent.message_id
-        functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "🔔")
+        try:
+            functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "🔔")
+        except:
+            pass
         return
 
-    # Agar endi hamma kanallarga obuna bo‘lingan bo‘lsa, oxirgi eski xabarni o‘chirish
     if uid in last_prompt_msg:
         try:
             bot.delete_message(message.chat.id, last_prompt_msg[uid])
@@ -1266,7 +1499,11 @@ def start(message):
         del last_prompt_msg[uid]
 
     if not check_required_bots(uid):
-        settings = bot_settings_collection.find_one({"setting": "main_image"})
+        try:
+            settings = bot_settings_collection.find_one({"setting": "main_image"})
+        except:
+            settings = None
+        
         kb = get_required_bots_keyboard(uid, code)
         if settings and settings.get("image_id"):
             sent = bot.send_photo(message.chat.id, settings["image_id"],
@@ -1276,7 +1513,10 @@ def start(message):
             sent = bot.send_message(message.chat.id,
                 "📢 <b>Kontentni ko'rish uchun quyidagi botlarga start bosing:</b>",
                 reply_markup=kb)
-        functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "🤖")
+        try:
+            functions.add_premium_reaction(bot, sent.chat.id, sent.message_id, "🤖")
+        except:
+            pass
         return
 
     is_batch = len(items) > 1
@@ -1302,14 +1542,16 @@ def callback(call):
                 "<b>Botni ishlatishni bilmaganlar uchun!\n\n"
                 "❏ Botni ishlatish qo'llanmasi:\n"
                 "1. Kanallarga obuna bo'ling!\n"
-               
                 "2. Tekshirish tugmasini bosing ✅\n"
                 "3. Kanaldagi anime post past qismidagi yuklab olish tugmasini bosing\n\n"
                 "📢 Kanal: <i>@AniGonUz</i></b>"
             ),
             reply_markup=markup, parse_mode="HTML"
         )
-        functions.add_premium_reaction(bot, call.message.chat.id, call.message.message_id, "📖")
+        try:
+            functions.add_premium_reaction(bot, call.message.chat.id, call.message.message_id, "📖")
+        except:
+            pass
     if data == "creator":
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("📝 Bot Haqida", callback_data="about"),
@@ -1326,8 +1568,12 @@ def callback(call):
             ),
             reply_markup=markup, parse_mode="HTML"
         )
-        functions.add_premium_reaction(bot, call.message.chat.id, call.message.message_id, "👨‍💻")
+        try:
+            functions.add_premium_reaction(bot, call.message.chat.id, call.message.message_id, "👨‍💻")
+        except:
+            pass
 
 # ==================== RUN SERVER ====================
 if __name__ == "__main__":
+    print("🚀 AniComplex bot ishga tushmoqda...")
     app.run(host="0.0.0.0", port=10000)
